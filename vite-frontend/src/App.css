@@ -1,0 +1,10 @@
+/* App.css - Main app styles */
+
+.app {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 100%);
+  overflow: hidden;
+}

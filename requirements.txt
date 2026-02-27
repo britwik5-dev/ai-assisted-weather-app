@@ -1,0 +1,8 @@
+pytest
+google-genai
+python-dotenv
+requests
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
