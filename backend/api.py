@@ -1,3 +1,5 @@
+#api.py
+
 """
 FastAPI REST API for Weather Assistant.
 Converts the WeatherAssistant into a web service.
