@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import logging
 import requests
@@ -106,9 +107,16 @@ class LLMClient:
         )
         user_prompt = (
             f"Here is the current weather data:\n{weather_summary}\n"
-            "Please provide:\n"
-            "1. A short, friendly recommendation (1 sentence) labelled 'Recommendation:'.\n"
-            "2. A brief insight about the conditions (1-2 sentences) labelled 'Insights:'."
+            "Write exactly 5 sentences about this weather following these rules:\n"
+            "1. Each sentence MUST be complete and end with a period.\n"
+            "2. Each sentence must be maximum 25 words.\n"
+            "3. Sentence 1: What to wear or carry today.\n"
+            "4. Sentence 2: Overall feel of the weather and comfort level.\n"
+            "5. Sentence 3: Best activities suited for this weather.\n"
+            "6. Sentence 4: Any health or safety tips for these conditions.\n"
+            "7. Sentence 5: What to expect as the day progresses.\n"
+            "Do not use labels, bullet points, numbers, or markdown like ** or *.\n"
+            "Write in a warm, friendly tone as if talking to a friend."
         )
         # TODO: Call Gemini API with system prompt and weather data
         try:
@@ -181,8 +189,8 @@ class WeatherAssistant:
         sentences = [s.strip() for s in sentences if s.strip()]
 
         if len(sentences) >= 3:
-            recommendation = " ".join(sentences[:2])
-            insights       = " ".join(sentences[2:])
+            recommendation = sentences[0]        # first sentence only
+            insights       = " ".join(sentences[1:])  # ALL remaining sentences
         elif len(sentences) == 2:
             recommendation = sentences[0]
             insights       = sentences[1]
@@ -222,48 +230,53 @@ def main():
     # Keep looping forever until the user types quit/exit
     # "while True" means "repeat this block endlessly"
     while True:
-
-        # input() pauses the program and waits for the user to type something
-        # .strip() removes accidental spaces e.g. "  London  " → "London"
         city = input("🌍 Enter city name: ").strip()
 
-        # If the user typed nothing at all, ask again
         if not city:
             print("  Please enter a city name.\n")
             continue
-            # "continue" skips the rest of this loop iteration and goes back to the top
 
-        # If the user wants to quit, break out of the loop
         if city.lower() in ["quit", "exit", "q"]:
-            # .lower() converts to lowercase so "Quit", "QUIT", "quit" all work
             print("\nGoodbye! Stay weather-aware! 👋")
             break
-            # "break" exits the while loop completely
 
         print("-" * 50)
 
         try:
-            # ── STEP 1: Ask Gemini if this looks like a city name ────────
-            # Before hitting the weather API, we ask Gemini to classify
-            # what the user typed. This way we handle casual conversation
-            # gracefully instead of getting a confusing 404 error.
-            check_prompt = (
-                f"The user typed: '{city}'\n"
-                "Is the user's ENTIRE input ONLY a city or place name "
-                "with the intention of getting a weather report?\n"
-                "Examples that are YES: 'London', 'New York', 'Tokyo', 'Paris'\n"
-                "Examples that are NO: 'Suggest me a restaurant in Kolkata', "
-                "'How are you?', 'What should I wear?', 'Tell me about Paris'\n"
-                "Reply with ONLY one word: YES or NO."
+            # ONE Gemini call that classifies AND responds in one shot
+            single_prompt = (
+                f"The user said: '{city}'\n\n"
+                "If this is asking about weather for a city, respond with:\n"
+                "WEATHER: <city name>\n\n"
+                "If this is anything else, respond with:\n"
+                "CHAT: <your helpful response>\n\n"
+                "Important rules for CHAT responses:\n"
+                "- Never use ** or * for bold text\n"
+                "- Never use bullet points like * or -\n"
+                "- Write in plain, friendly sentences only\n\n"
+                "Examples:\n"
+                "User: Kolkata                               WEATHER: Kolkata\n"
+                "User: what is the weather like in Kolkata?  WEATHER: Kolkata\n"
+                "User: how is weather in Delhi?              WEATHER: Delhi\n"
+                "User: is it raining in Mumbai?              WEATHER: Mumbai\n"
+                "User: New York                              WEATHER: New York\n"
+                "User: how are you?                          CHAT: I'm doing great! I'm your weather assistant — type any city name for a live forecast!\n"
+                "User: suggest restaurants in Kolkata        CHAT: Here are some great restaurants in Kolkata...\n"
+                "User: who is Elon Musk?                     CHAT: Elon Musk is a billionaire entrepreneur...\n"
             )
-            check_response = assistant.llm_client.client.models.generate_content(
+            single_response = assistant.llm_client.client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=check_prompt,
+                contents=single_prompt,
+                config=genai.types.GenerateContentConfig(
+                    max_output_tokens=300,
+                    temperature=0.0,
+                ),
             )
-            is_city = check_response.text.strip().upper().startswith("YES")
+            response_text = (single_response.text or "").strip()
 
-            if is_city:
-                # ── It looks like a city — fetch weather as normal ───────
+            if response_text.startswith("WEATHER:"):
+                # It's a weather request — extract city name
+                city = response_text.replace("WEATHER:", "").strip()
                 print(f"\nFetching weather for '{city}'...")
 
                 result = assistant.get_weather_insights(city)
@@ -281,31 +294,30 @@ def main():
                     print(f"\n  🔍 Insights:")
                     print(f"     {result.get('insights', 'N/A')}")
 
+            elif response_text.startswith("CHAT:"):
+                # It's a general question — show Gemini's response
+                chat_reply = response_text.replace("CHAT:", "").strip()
+                print(f"\n  🤖 {chat_reply}")
+
             else:
-                # ── Not a city — let Gemini reply conversationally ───────
-                # We still give a helpful answer but remind the user what
-                # this assistant is actually designed for.
-                chat_prompt = (
-                    f"The user said: '{city}'\n"
-                    "You are a friendly assistant who specialises in weather but "
-                    "can also help with general questions. "
-                    "Answer their question helpfully and fully using your knowledge. "
-                    "If their question is DIRECTLY about weather or climate "
-                    "(e.g. 'What is humidity?', 'What causes rain?') — answer "
-                    "normally with no reminder at the end. "
-                    "For ALL OTHER questions — including questions about cities, "
-                    "restaurants, people, places, or anything else not directly "
-                    "about weather — answer the question fully AND then add a "
-                    "short friendly reminder at the end that you are primarily a "
-                    "weather assistant and the user can type any city name to get "
-                    "a live weather report with personalised recommendations. "
-                    "Keep the reminder one sentence, natural and not robotic."
-                )
-                chat_response = assistant.llm_client.client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=chat_prompt,
-                )
-                print(f"\n  🤖 {chat_response.text.strip()}")
+                # Gemini returned something unexpected — fallback
+                if len(city.split()) <= 3:
+                    # Short input — probably a city name, try fetching weather
+                    result = assistant.get_weather_insights(city)
+                    if "error" not in result:
+                        print(f"  📍 City        : {result.get('city', 'N/A')}, {result.get('country', 'N/A')}")
+                        print(f"  🌡️  Temperature : {result.get('temperature', 'N/A')}°C")
+                        print(f"  🌤️  Description : {result.get('description', 'N/A')}")
+                        print(f"  💧 Humidity    : {result.get('humidity', 'N/A')}%")
+                        print(f"  💨 Wind Speed  : {result.get('wind_speed', 'N/A')} m/s")
+                        print(f"\n  💡 Recommendation:")
+                        print(f"     {result.get('recommendation', 'N/A')}")
+                        print(f"\n  🔍 Insights:")
+                        print(f"     {result.get('insights', 'N/A')}")
+                    else:
+                        print(f"  ❌ Error: {result['error']}")
+                else:
+                    print(f"\n  🤖 {response_text}")
 
         except Exception as e:
             print(f"  ❌ Unexpected error: {str(e)}")
